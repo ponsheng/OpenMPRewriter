@@ -23,7 +23,7 @@ std::string RuntimeFuncDecl =
   "#include <stdio.h>\n"
   "#include <stdint.h>\n"
   "int __tgt_register_mem(void* mem, uint64_t size) {"
-  "printf(\"mem :%p, size: %lld\\n\",mem,size);"
+  "printf(\"mem :%p, size: %lu\\n\",mem,size);"
   "return 1; }\n";
 
 class OpenMPRewriteASTVisitor : public RecursiveASTVisitor<OpenMPRewriteASTVisitor> {
