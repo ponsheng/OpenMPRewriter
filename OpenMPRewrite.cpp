@@ -22,9 +22,9 @@ namespace {
 std::string RuntimeFuncDecl = 
   "#include <stdio.h>\n"
   "#include <stdint.h>\n"
-  "int __tgt_register_mem(void* mem, uint64_t size) {"
-  "printf(\"mem :%p, size: %lu\\n\",mem,size);"
-  "return 1; }\n";
+  "int __tgt_register_mem(void* mem, uint64_t size)"
+  ";\n";
+  //"{printf(\"mem :%p, size: %lu\\n\",mem,size);return 1; }\n";
 
 class OpenMPRewriteASTVisitor : public RecursiveASTVisitor<OpenMPRewriteASTVisitor> {
   Rewriter &OpenMPRewriter;
@@ -32,29 +32,38 @@ class OpenMPRewriteASTVisitor : public RecursiveASTVisitor<OpenMPRewriteASTVisit
 public:
   OpenMPRewriteASTVisitor(Rewriter &R, CompilerInstance &CI) : OpenMPRewriter(R), CI(CI) {}
 
-  bool VisitCastExpr(CastExpr *ce) {
-    // If same address and size on stack?
-    QualType t2 = ce->getSubExpr()->getType().getDesugaredType(CI.getASTContext());
-    if (isa<ArrayType>(t2)) {
-      //uint64_t size = cat->getSize().getZExtValue ();
-      Expr *e = ce->getSubExpr();
-      // TODO check side effect
-      SourceLocation loc = e->getBeginLoc();
-      const SourceManager &sm = CI.getSourceManager();
-      const LangOptions &lopt = CI.getLangOpts();
-      SmallVector<char, 25> buffer;
-      StringRef VarName = Lexer::getSpelling(sm.getSpellingLoc(loc), buffer,
-                            sm, lopt, nullptr);
-      size_t size = VarName.size();
-      SourceLocation endloc = loc.getLocWithOffset(size);
+  // There is alot of case has CK_ArrayToPointerDecay
+  // Side effect is very complex to handle
+  // LLVM IR pass can handle all case
+  bool VisitDeclStmt(DeclStmt *ds) {
+    std::vector<std::string> name_list;
+    for (auto i = ds->decl_begin(); i != ds->decl_end(); i++) {
+      Decl *d = *i;
 
-      std::stringstream InsertTxt;
-      InsertTxt << "(__tgt_register_mem((void*)" << VarName.str() << ", sizeof(" << VarName.str() << "))?";
-      std::string EndString = ":NULL)";
+      if (VarDecl *vd = dyn_cast<VarDecl>(d)) {
+        QualType qt = vd->getType().getDesugaredType(CI.getASTContext());
+        if (!isa<ArrayType>(qt)) {
+          return true;
+        }
+        vd->dump();
+        enum StorageClass sc = vd->getStorageClass();
+        if (sc == SC_PrivateExtern || sc == SC_Extern || sc == SC_Register || sc == SC_Auto) {
+          return true;
+        }
 
-      OpenMPRewriter.InsertText(loc, InsertTxt.str(), true, true);
-      OpenMPRewriter.InsertText(endloc, EndString, true, true);
+        std::string var_name =  vd->getNameAsString();
+        name_list.push_back(var_name);
+
+      }
     }
+    std::stringstream insert_txt;
+    for (auto s : name_list) {
+      std::cout << s;
+      insert_txt << "__tgt_register_mem((void*)" << s << ", sizeof(" << s << "));";
+    }
+    SourceLocation loc = ds->getEndLoc().getLocWithOffset(1);
+    const SourceManager &sm = CI.getSourceManager();
+    OpenMPRewriter.InsertText(loc, insert_txt.str(), true, true);
     return true;
   }
 };
