@@ -11,8 +11,9 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Sema/Sema.h"
-#include "llvm/Support/raw_ostream.h"
 #include "clang/Rewrite/Core/Rewriter.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/Path.h"
 
 using namespace clang;
 
@@ -22,7 +23,7 @@ namespace {
 std::string RuntimeFuncDecl = 
   "#include <stdio.h>\n"
   "#include <stdint.h>\n"
-  "int __tgt_register_mem(void* mem, uint64_t size)"
+  "void * __tgt_register_mem(void* mem, uint64_t size)"
   ";\n";
   //"{printf(\"mem :%p, size: %lu\\n\",mem,size);return 1; }\n";
 
@@ -31,7 +32,7 @@ class OpenMPRewriteASTVisitor : public RecursiveASTVisitor<OpenMPRewriteASTVisit
   CompilerInstance &CI;
 public:
   OpenMPRewriteASTVisitor(Rewriter &R, CompilerInstance &CI) : OpenMPRewriter(R), CI(CI) {}
-
+  // TODO global array
   // There is alot of case has CK_ArrayToPointerDecay
   // Side effect is very complex to handle
   // LLVM IR pass can handle all case
@@ -45,7 +46,6 @@ public:
         if (!isa<ArrayType>(qt)) {
           return true;
         }
-        vd->dump();
         enum StorageClass sc = vd->getStorageClass();
         if (sc == SC_PrivateExtern || sc == SC_Extern || sc == SC_Register || sc == SC_Auto) {
           return true;
@@ -62,8 +62,61 @@ public:
       insert_txt << "__tgt_register_mem((void*)" << s << ", sizeof(" << s << "));";
     }
     SourceLocation loc = ds->getEndLoc().getLocWithOffset(1);
-    const SourceManager &sm = CI.getSourceManager();
     OpenMPRewriter.InsertText(loc, insert_txt.str(), true, true);
+    return true;
+  }
+  bool VisitCallExpr(CallExpr *ce) {
+    Expr *e = ce->getCallee()->IgnoreCasts();
+    if (DeclRefExpr *dre = dyn_cast<DeclRefExpr>(e)) {
+      // check API
+      ValueDecl *vd = dre->getDecl();
+      if (vd && isa<FunctionDecl>(vd)) {
+        FunctionDecl *fd = dyn_cast<FunctionDecl>(vd);
+        StringRef sf = vd->getName();
+        if (!(sf == "malloc")) {
+          return true;
+        }
+        SourceManager &sm = CI.getSourceManager();
+        PresumedLoc PLoc = sm.getPresumedLoc(fd->getSourceRange().getBegin());
+        if (PLoc.isInvalid()) {
+          return true;
+        }
+        StringRef HeaderName = llvm::sys::path::filename(PLoc.getFilename());
+        if (HeaderName != "stdlib.h") {
+          return true;
+        }
+        if (ce->getNumArgs() > 1) {
+          return true;
+        }
+        SmallVector<char, 25> buffer;
+        SourceRange ArgSR = ce->getArg(0)->getSourceRange();
+        SourceRange CallSR = ce->getSourceRange();
+        StringRef literal = Lexer::getSpelling(sm.getSpellingLoc(ArgSR.getEnd()), buffer, sm, CI.getLangOpts(), nullptr);
+        size_t token_size = literal.size();
+        if (token_size > 1) {
+          ArgSR.setEnd(ArgSR.getEnd().getLocWithOffset(token_size - 1));
+        }
+        if (ArgSR.getBegin().isMacroID()) {
+          ArgSR.setBegin(sm.getExpansionLoc(ArgSR.getBegin()));
+        }
+        if (ArgSR.getEnd().isMacroID()) {
+          ArgSR.setEnd(sm.getExpansionLoc(ArgSR.getEnd()));
+        }
+        const char *begin = sm.getCharacterData(ArgSR.getBegin());
+        const char *end = sm.getCharacterData(ArgSR.getEnd());
+        if (!begin || !end) {
+          llvm::errs() << "Error getCharacterData\n";
+          return true;
+        }
+        std::string s(begin, end+1);
+        std::string prefix = "__tgt_register_mem((void*)";
+        std::string postfix;
+        postfix += "," + s + ")";
+
+        OpenMPRewriter.InsertText(CallSR.getBegin(), prefix, true, true);
+        OpenMPRewriter.InsertText(CallSR.getEnd().getLocWithOffset(1), postfix, true, true);
+      }
+    }
     return true;
   }
 };
