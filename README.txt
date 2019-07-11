@@ -5,8 +5,8 @@ The goal is to rewrite orinal source code, automatically add runtime function ca
 # Build
 
 1. Have your own llvm/clang
-2. Put this project under clang/examples
-3. re-cmake and build
+2. Put this project under clang/examples and modify CMakeLists
+3. re-cmake and build target 'OpenMPRewrite'
 4. You will find OpenMPRewrite.so under $BUILD/lib
 
 Once the plugin is built, you can run it using:
