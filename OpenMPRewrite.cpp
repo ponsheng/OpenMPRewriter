@@ -91,16 +91,17 @@ public:
         SmallVector<char, 25> buffer;
         SourceRange ArgSR = ce->getArg(0)->getSourceRange();
         SourceRange CallSR = ce->getSourceRange();
-        StringRef literal = Lexer::getSpelling(sm.getSpellingLoc(ArgSR.getEnd()), buffer, sm, CI.getLangOpts(), nullptr);
-        size_t token_size = literal.size();
-        if (token_size > 1) {
-          ArgSR.setEnd(ArgSR.getEnd().getLocWithOffset(token_size - 1));
-        }
+
         if (ArgSR.getBegin().isMacroID()) {
           ArgSR.setBegin(sm.getExpansionLoc(ArgSR.getBegin()));
         }
         if (ArgSR.getEnd().isMacroID()) {
           ArgSR.setEnd(sm.getExpansionLoc(ArgSR.getEnd()));
+        }
+
+        unsigned token_size = Lexer::MeasureTokenLength(ArgSR.getEnd(), sm, CI.getLangOpts());
+        if (token_size > 1) {
+          ArgSR.setEnd(ArgSR.getEnd().getLocWithOffset(token_size - 1));
         }
         const char *begin = sm.getCharacterData(ArgSR.getBegin());
         const char *end = sm.getCharacterData(ArgSR.getEnd());
